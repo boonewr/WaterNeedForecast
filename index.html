@@ -67,6 +67,19 @@
                 </table>
             </div>
         </main>
+
+        <footer id="search-section" class="mt-8 transition-all duration-700 opacity-0 transform translate-y-10">
+            <div class="bg-gray-800 rounded-lg shadow-lg p-6">
+                <h2 class="text-2xl font-bold text-center mb-4">Search by City</h2>
+                <form id="city-search-form" class="flex flex-col sm:flex-row gap-4">
+                    <input type="text" id="city-input" placeholder="e.g., Raleigh, NC" class="flex-grow bg-gray-700 border border-gray-600 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-white">
+                    <button type="submit" id="search-button" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform hover:scale-105 disabled:bg-gray-500">
+                        Search
+                    </button>
+                </form>
+                <p id="search-error" class="text-red-400 text-center mt-3 h-5"></p> <!-- Height is set to prevent layout shift on error message -->
+            </div>
+        </footer>
     </div>
 
     <script>
@@ -97,6 +110,11 @@
         const loadingChartIndicator = document.getElementById('loading-chart');
         const loadingTableIndicator = document.getElementById('loading-table');
         const locationDisplay = document.getElementById('location-display');
+        const searchSection = document.getElementById('search-section');
+        const citySearchForm = document.getElementById('city-search-form');
+        const cityInput = document.getElementById('city-input');
+        const searchButton = document.getElementById('search-button');
+        const searchError = document.getElementById('search-error');
 
         // Setup Day.js plugins
         dayjs.extend(dayjs_plugin_utc);
@@ -122,6 +140,32 @@
             } catch (error) {
                 console.error("Failed to fetch weather data:", error);
                 // Removed alert per best practice for embedded frames
+                return null;
+            }
+        }
+
+        /**
+         * Uses forward geocoding to get coordinates from a city name.
+         * @param {string} cityName - The name of the city to search for.
+         * @returns {Promise<Object|null>} An object with lat, lon, and name, or null if not found.
+         */
+        async function getCoordsFromCity(cityName) {
+            const GEOCODING_API_URL = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityName)}`;
+            try {
+                const response = await fetch(GEOCODING_API_URL, { headers: { 'Accept-Language': 'en' } });
+                 if (!response.ok) throw new Error('Forward geocoding API request failed');
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    const firstResult = data[0];
+                    return {
+                        lat: firstResult.lat,
+                        lon: firstResult.lon,
+                        name: firstResult.display_name
+                    };
+                }
+                 return null; // City not found
+            } catch (error) {
+                console.error("Forward geocoding failed:", error);
                 return null;
             }
         }
@@ -240,7 +284,6 @@
                             type: 'linear',
                             position: 'right',
                             beginAtZero: true,
-                            suggestedMax: 0.25,
                             title: {
                                 display: true,
                                 text: 'Precipitation / ET (inches)',
@@ -357,7 +400,7 @@
                 populateTable(data.daily);
             } else {
                  // Handle UI for error case
-                 if(loadingTableIndicator) loadingTableIndicator.textContent = 'Failed to load data.';
+                 scheduleBody.innerHTML = `<tr><td colspan="2" class="text-center p-8 text-red-400">Failed to load forecast data. Please try again.</td></tr>`;
                  chartCanvas.style.display = 'none'; // Hide broken chart
             }
         }
@@ -391,6 +434,44 @@
         // --- EVENT LISTENERS ---
         document.addEventListener('DOMContentLoaded', getLocationAndFetchWeather);
         refreshButton.addEventListener('click', getLocationAndFetchWeather);
+        
+        citySearchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const cityName = cityInput.value.trim();
+            if (!cityName) return;
+
+            searchButton.disabled = true;
+            searchButton.textContent = 'Searching...';
+            searchError.textContent = '';
+
+            const coords = await getCoordsFromCity(cityName);
+
+            if (coords) {
+                // Scroll to top to see the new chart while it loads
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                updateForecast(coords.lat, coords.lon, coords.name);
+                cityInput.value = ''; // Clear input on success
+            } else {
+                searchError.textContent = `Could not find "${cityName}". Please try again.`;
+            }
+
+            searchButton.disabled = false;
+            searchButton.textContent = 'Search';
+        });
+
+        // --- INTERSECTION OBSERVER for scroll-in animation ---
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.remove('opacity-0', 'translate-y-10');
+                    observer.unobserve(entry.target); // Stop observing after it's visible
+                }
+            });
+        }, {
+            threshold: 0.1 // Trigger when 10% of the element is visible
+        });
+
+        observer.observe(searchSection);
 
     </script>
 
