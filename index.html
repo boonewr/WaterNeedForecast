@@ -27,7 +27,7 @@
     <div class="container mx-auto p-4 md:p-8 max-w-4xl">
         <header class="text-center mb-8">
             <h1 class="text-3xl md:text-4xl font-bold text-emerald-400">Garden Watering Forecast</h1>
-            <p class="text-gray-400 mt-2">7-day outlook for Greensboro, NC</p>
+            <p id="location-display" class="text-gray-400 mt-2">Fetching location...</p>
         </header>
 
         <main>
@@ -71,8 +71,24 @@
 
     <script>
         // --- CONFIGURATION ---
-        const API_URL = 'https://api.open-meteo.com/v1/forecast?latitude=36.0726&longitude=-79.792&daily=et0_fao_evapotranspiration,precipitation_sum&hourly=et0_fao_evapotranspiration,precipitation,temperature_2m,evapotranspiration&timezone=auto&precipitation_unit=inch';
+        const DEFAULT_COORDS = { lat: 36.0726, lon: -79.792, name: 'Greensboro, NC (Default)' };
         let weatherChart = null; // To hold the chart instance
+
+        const US_STATES = {
+            "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR", "California": "CA",
+            "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE", "Florida": "FL", "Georgia": "GA",
+            "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA",
+            "Kansas": "KS", "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+            "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+            "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH",
+            "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY", "North Carolina": "NC",
+            "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK", "Oregon": "OR", "Pennsylvania": "PA",
+            "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD", "Tennessee": "TN",
+            "Texas": "TX", "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
+            "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
+            "District of Columbia": "DC", "American Samoa": "AS", "Guam": "GU",
+            "Northern Mariana Islands": "MP", "Puerto Rico": "PR", "United States Virgin Islands": "VI",
+        };
 
         // --- DOM ELEMENTS ---
         const refreshButton = document.getElementById('refresh-button');
@@ -80,6 +96,7 @@
         const chartCanvas = document.getElementById('weatherChart');
         const loadingChartIndicator = document.getElementById('loading-chart');
         const loadingTableIndicator = document.getElementById('loading-table');
+        const locationDisplay = document.getElementById('location-display');
 
         // Setup Day.js plugins
         dayjs.extend(dayjs_plugin_utc);
@@ -90,9 +107,12 @@
 
         /**
          * Fetches weather data from the Open-Meteo API.
+         * @param {number} lat - Latitude for the forecast.
+         * @param {number} lon - Longitude for the forecast.
          * @returns {Promise<Object|null>} The weather data or null if an error occurs.
          */
-        async function getWeatherData() {
+        async function getWeatherData(lat, lon) {
+            const API_URL = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=et0_fao_evapotranspiration,precipitation_sum&hourly=et0_fao_evapotranspiration,precipitation,temperature_2m&timezone=auto&forecast_days=7&precipitation_unit=inch`;
             try {
                 const response = await fetch(API_URL);
                 if (!response.ok) {
@@ -101,8 +121,38 @@
                 return await response.json();
             } catch (error) {
                 console.error("Failed to fetch weather data:", error);
-                alert("Could not retrieve weather data. Please try again later.");
+                // Removed alert per best practice for embedded frames
                 return null;
+            }
+        }
+
+        /**
+         * Uses reverse geocoding to get a city and state name from coordinates.
+         * @param {number} lat - The latitude.
+         * @param {number} lon - The longitude.
+         * @returns {Promise<string>} A formatted location string like "City, ST" or a fallback.
+         */
+        async function getCityAndState(lat, lon) {
+            // Using the free Nominatim API for reverse geocoding
+            const GEOCODING_API_URL = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`;
+            try {
+                const response = await fetch(GEOCODING_API_URL);
+                if (!response.ok) throw new Error('Geocoding API request failed');
+                const data = await response.json();
+
+                if (data.address) {
+                    const city = data.address.city || data.address.town || data.address.village;
+                    const state = data.address.state;
+                    if (city && state) {
+                        const stateAbbreviation = US_STATES[state] || state;
+                        return `${city}, ${stateAbbreviation}`;
+                    }
+                }
+                // Fallback if geocoding doesn't return a clear city/state
+                return 'Your Current Location';
+            } catch (error) {
+                console.error("Reverse geocoding failed:", error);
+                return 'Your Current Location'; // Fallback on any error
             }
         }
 
@@ -282,16 +332,20 @@
 
         /**
          * Main function to orchestrate fetching and rendering.
+         * @param {number} lat - The latitude to fetch data for.
+         * @param {number} lon - The longitude to fetch data for.
+         * @param {string} locationName - The name of the location to display.
          */
-        async function updateForecast() {
+        async function updateForecast(lat, lon, locationName) {
             // Set UI to loading state
             refreshButton.disabled = true;
             refreshButton.textContent = 'Refreshing...';
             loadingChartIndicator.style.display = 'flex';
             if(loadingTableIndicator) loadingTableIndicator.style.display = 'table-cell';
+            locationDisplay.textContent = `7-day outlook for ${locationName}`;
 
 
-            const data = await getWeatherData();
+            const data = await getWeatherData(lat, lon);
 
             // Reset UI from loading state
             refreshButton.disabled = false;
@@ -307,15 +361,40 @@
                  chartCanvas.style.display = 'none'; // Hide broken chart
             }
         }
+        
+        /**
+         * Tries to get the user's location and then fetches the weather.
+         * Falls back to default coordinates on failure.
+         */
+        function getLocationAndFetchWeather() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    async (position) => {
+                        // Success: Use user's coordinates
+                        const { latitude, longitude } = position.coords;
+                        const locationName = await getCityAndState(latitude, longitude);
+                        updateForecast(latitude, longitude, locationName);
+                    },
+                    () => {
+                        // Error/Denied: Use default coordinates
+                        console.log("Geolocation permission denied or failed. Using default location.");
+                        updateForecast(DEFAULT_COORDS.lat, DEFAULT_COORDS.lon, DEFAULT_COORDS.name);
+                    }
+                );
+            } else {
+                // Not supported: Use default coordinates
+                console.log("Geolocation is not supported by this browser. Using default location.");
+                updateForecast(DEFAULT_COORDS.lat, DEFAULT_COORDS.lon, DEFAULT_COORDS.name);
+            }
+        }
 
         // --- EVENT LISTENERS ---
-        document.addEventListener('DOMContentLoaded', updateForecast);
-        refreshButton.addEventListener('click', updateForecast);
+        document.addEventListener('DOMContentLoaded', getLocationAndFetchWeather);
+        refreshButton.addEventListener('click', getLocationAndFetchWeather);
 
     </script>
 
 </body>
 </html>
-
 
 
