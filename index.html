@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Garden Watering Forecast</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for the graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/utc.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/timezone.js"></script>
+
+    <style>
+        /* Custom styles for a nice, clean look */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-white antialiased">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-4xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-emerald-400">Garden Watering Forecast</h1>
+            <p class="text-gray-400 mt-2">7-day outlook for Greensboro, NC</p>
+        </header>
+
+        <main>
+            <!-- Chart Section -->
+            <div id="chart-container" class="bg-gray-800 p-4 rounded-lg shadow-lg mb-6 relative min-h-[300px] md:min-h-[400px]">
+                <canvas id="weatherChart"></canvas>
+                <div id="loading-chart" class="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-75 rounded-lg">
+                    <p class="text-lg">Loading forecast data...</p>
+                </div>
+            </div>
+
+            <!-- Refresh Button -->
+            <div class="text-center mb-8">
+                <button id="refresh-button" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform hover:scale-105 disabled:bg-gray-500 disabled:cursor-not-allowed">
+                    Refresh Forecast
+                </button>
+            </div>
+
+            <!-- Watering Schedule Table -->
+            <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                 <h2 class="text-2xl font-bold text-center p-4 bg-gray-700">Watering Schedule</h2>
+                <table class="min-w-full text-left">
+                    <thead class="bg-gray-700">
+                        <tr>
+                            <th class="p-4 text-lg font-semibold">Date</th>
+                            <th class="p-4 text-lg font-semibold">Watering Need</th>
+                        </tr>
+                    </thead>
+                    <tbody id="watering-schedule-body">
+                        <!-- Rows will be dynamically inserted here -->
+                        <tr>
+                            <td colspan="2" class="text-center p-8 text-gray-400" id="loading-table">
+                                Loading schedule...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const API_URL = 'https://api.open-meteo.com/v1/forecast?latitude=36.0726&longitude=-79.792&daily=et0_fao_evapotranspiration,precipitation_sum&hourly=et0_fao_evapotranspiration,precipitation,temperature_2m,evapotranspiration&timezone=auto&precipitation_unit=inch';
+        let weatherChart = null; // To hold the chart instance
+
+        // --- DOM ELEMENTS ---
+        const refreshButton = document.getElementById('refresh-button');
+        const scheduleBody = document.getElementById('watering-schedule-body');
+        const chartCanvas = document.getElementById('weatherChart');
+        const loadingChartIndicator = document.getElementById('loading-chart');
+        const loadingTableIndicator = document.getElementById('loading-table');
+
+        // Setup Day.js plugins
+        dayjs.extend(dayjs_plugin_utc);
+        dayjs.extend(dayjs_plugin_timezone);
+
+
+        // --- CORE FUNCTIONS ---
+
+        /**
+         * Fetches weather data from the Open-Meteo API.
+         * @returns {Promise<Object|null>} The weather data or null if an error occurs.
+         */
+        async function getWeatherData() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error("Failed to fetch weather data:", error);
+                alert("Could not retrieve weather data. Please try again later.");
+                return null;
+            }
+        }
+
+        /**
+         * Placeholder function to determine the watering need for a given day.
+         * @param {number} et0 - Daily reference evapotranspiration.
+         * @param {number} precipitation - Daily precipitation sum.
+         * @returns {string} The watering need level ('None', 'Low', 'Moderate', 'High').
+         */
+        function calculateWateringNeed(et0, precipitation) {
+             // This is a simplified model. A real model would be more complex.
+            const netWater = et0 - precipitation;
+            if (netWater <= 0) return 'None';
+            if (netWater > 0 && netWater <= 0.1) return 'Low';
+            if (netWater > 0.1 && netWater <= 0.2) return 'Moderate';
+            return 'High';
+        }
+
+        /**
+         * Renders the weather data on a Chart.js chart.
+         * @param {Object} hourlyData - The hourly data from the API.
+         */
+        function renderChart(hourlyData, timezone) {
+            if (weatherChart) {
+                weatherChart.destroy(); // Destroy previous chart instance before creating a new one
+            }
+
+            const ctx = chartCanvas.getContext('2d');
+            
+            const labels = hourlyData.time.map(t => dayjs.tz(t, timezone).format('M-DD hA'));
+
+            weatherChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            type: 'line',
+                            label: 'Temperature (°F)',
+                            data: hourlyData.temperature_2m.map(temp => (temp * 9/5) + 32), // Convert C to F
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            yAxisID: 'yTemp',
+                            tension: 0.3,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                        },
+                        {
+                            type: 'bar',
+                            label: 'Precipitation (in)',
+                            data: hourlyData.precipitation,
+                            backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            yAxisID: 'yPrecip',
+                        },
+                        {
+                            type: 'line',
+                            label: 'Evapotranspiration (in)',
+                            data: hourlyData.et0_fao_evapotranspiration,
+                            borderColor: 'rgba(255, 206, 86, 1)',
+                            backgroundColor: 'rgba(255, 206, 86, 0.2)',
+                            yAxisID: 'yPrecip',
+                            tension: 0.3,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        yTemp: {
+                            type: 'linear',
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Temperature (°F)',
+                                color: 'white',
+                            },
+                             ticks: { color: 'white' },
+                             grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                        },
+                        yPrecip: {
+                            type: 'linear',
+                            position: 'right',
+                            beginAtZero: true,
+                            suggestedMax: 0.25,
+                            title: {
+                                display: true,
+                                text: 'Precipitation / ET (inches)',
+                                color: 'white'
+                            },
+                            ticks: { color: 'white' },
+                            grid: { drawOnChartArea: false } // Only show grid for temp axis
+                        },
+                        x: {
+                            ticks: { 
+                                color: 'white',
+                                maxRotation: 90,
+                                minRotation: 70,
+                                autoSkip: true,
+                                maxTicksLimit: 14 // Show a label roughly every 12 hours
+                             },
+                             grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: 'white'
+                            }
+                        },
+                        tooltip: {
+                             mode: 'index',
+                             intersect: false,
+                        }
+                    },
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                }
+            });
+        }
+
+        /**
+         * Populates the watering schedule table with data.
+         * @param {Object} dailyData - The daily data from the API.
+         */
+        function populateTable(dailyData) {
+            scheduleBody.innerHTML = ''; // Clear existing content
+
+            if (!dailyData || !dailyData.time || dailyData.time.length === 0) {
+                 scheduleBody.innerHTML = `<tr><td colspan="2" class="text-center p-8 text-red-400">Could not load schedule data.</td></tr>`;
+                 return;
+            }
+
+            const wateringLevelColors = {
+                'None': 'bg-gray-600',
+                'Low': 'bg-blue-600',
+                'Moderate': 'bg-yellow-600',
+                'High': 'bg-red-600'
+            };
+            
+            dailyData.time.forEach((dateStr, index) => {
+                const date = dayjs(dateStr);
+                const dayName = date.format('dddd');
+                const formattedDate = date.format('M-DD');
+                
+                const et0 = dailyData.et0_fao_evapotranspiration[index];
+                const precip = dailyData.precipitation_sum[index];
+                const wateringNeed = calculateWateringNeed(et0, precip);
+
+                const row = document.createElement('tr');
+                row.className = 'border-b border-gray-700 hover:bg-gray-600';
+
+                const dateCell = document.createElement('td');
+                dateCell.className = 'p-4';
+                dateCell.innerHTML = `<div class="font-semibold">${dayName}</div><div class="text-sm text-gray-400">${formattedDate}</div>`;
+
+                const needCell = document.createElement('td');
+                needCell.className = 'p-4';
+                
+                const needBadge = document.createElement('span');
+                needBadge.textContent = wateringNeed;
+                needBadge.className = `px-3 py-1 text-sm font-semibold rounded-full text-white ${wateringLevelColors[wateringNeed]}`;
+                
+                needCell.appendChild(needBadge);
+                
+                row.appendChild(dateCell);
+                row.appendChild(needCell);
+
+                scheduleBody.appendChild(row);
+            });
+        }
+
+        /**
+         * Main function to orchestrate fetching and rendering.
+         */
+        async function updateForecast() {
+            // Set UI to loading state
+            refreshButton.disabled = true;
+            refreshButton.textContent = 'Refreshing...';
+            loadingChartIndicator.style.display = 'flex';
+            if(loadingTableIndicator) loadingTableIndicator.style.display = 'table-cell';
+
+
+            const data = await getWeatherData();
+
+            // Reset UI from loading state
+            refreshButton.disabled = false;
+            refreshButton.textContent = 'Refresh Forecast';
+            loadingChartIndicator.style.display = 'none';
+
+            if (data) {
+                renderChart(data.hourly, data.timezone);
+                populateTable(data.daily);
+            } else {
+                 // Handle UI for error case
+                 if(loadingTableIndicator) loadingTableIndicator.textContent = 'Failed to load data.';
+                 chartCanvas.style.display = 'none'; // Hide broken chart
+            }
+        }
+
+        // --- EVENT LISTENERS ---
+        document.addEventListener('DOMContentLoaded', updateForecast);
+        refreshButton.addEventListener('click', updateForecast);
+
+    </script>
+
+</body>
+</html>
+
+
+
